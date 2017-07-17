@@ -1,0 +1,25 @@
+¼hecked whether address is part of an allocated region.
+Frame number to be created is: 1030
+handled page fault
+EXCEPTION DISPATCHER: exc_no = <14>
+Checked whether address is part of an allocated region.
+Frame number to be created is: 1031
+handled page fault
+Frame number to be freed is: 1027
+freed page
+Frame number to be freed is: 1028
+freed page
+Frame number to be freed is: 1029
+freed page
+Frame number to be freed is: 1030
+freed page
+Frame number to be freed is: 1031
+Page table empty and to be freed is: 1026
+freed page
+Loaded page table
+Released region of memory.
+Test Passed! Congratulations!
+YOU CAN SAFELY TURN OFF THE MACHINE NOW.
+One second has passed
+One second has passed
+

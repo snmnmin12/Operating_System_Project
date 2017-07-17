@@ -1,0 +1,173 @@
+/*
+ File: vm_pool.C
+ 
+ Author:
+ Date  :
+ 
+ */
+
+/*--------------------------------------------------------------------------*/
+/* DEFINES */
+/*--------------------------------------------------------------------------*/
+
+/* -- (none) -- */
+
+/*--------------------------------------------------------------------------*/
+/* INCLUDES */
+/*--------------------------------------------------------------------------*/
+
+#include "vm_pool.H"
+#include "page_table.H"
+#include "console.H"
+#include "utils.H"
+#include "assert.H"
+#include "simple_keyboard.H"
+
+/*--------------------------------------------------------------------------*/
+/* DATA STRUCTURES */
+/*--------------------------------------------------------------------------*/
+
+/* -- (none) -- */
+
+/*--------------------------------------------------------------------------*/
+/* CONSTANTS */
+/*--------------------------------------------------------------------------*/
+
+/* -- (none) -- */
+
+/*--------------------------------------------------------------------------*/
+/* FORWARDS */
+/*--------------------------------------------------------------------------*/
+
+/* -- (none) -- */
+void frame_address(PageTable  *page_table, unsigned long address) {
+    unsigned int page_table_index = address>>22;
+    unsigned int page_frame_index = ((address>>12) & 0x3FF);
+    unsigned long *page_table_addr = (unsigned long*)(VIRTUAL_TABLE_ADDR +(page_table_index<<12));
+    if (page_table_addr[page_frame_index] & 1) {
+	    unsigned long first_frame_no = (page_table_addr[page_frame_index])/(PageTable::PAGE_SIZE);
+	    page_table_addr[page_frame_index] = 2;
+	    Console::puts("Page Frame to be freed is: "); 
+	    Console::puti(first_frame_no); Console::puts("\n");
+            page_table->free_page(first_frame_no);
+    }
+
+    unsigned int i = 0;
+    for (i = 0; i < 1024; i++) if (page_table_addr[i] & 1) break;
+    if (i == 1024) {
+	 unsigned long *cur_page_directory = (unsigned long*) VIRTUAL_DIREC_ADDR;
+	 unsigned long page_no = (cur_page_directory[page_table_index] & VIRTUAL_DIREC_ADDR)/(PageTable::PAGE_SIZE);
+	 cur_page_directory[page_table_index] = 2;
+	 page_table->free_page(page_no);
+	 Console::puts("Page table frame to be freed is: ");Console::puti(page_no); Console::puts("\n");
+    }
+    page_table->load();
+}
+void silent_array(Region_Descriptor *region_des, ContFramePool* process_mem_pool) {
+    unsigned long address = (unsigned long)region_des;
+
+    unsigned long *cur_page_directory = (unsigned long*) VIRTUAL_DIREC_ADDR;
+    unsigned int page_table_index = address>>22;
+    unsigned int page_frame_index = ((address>>12) & 0x3FF);
+    unsigned long *page_table_addr = (unsigned long*)(VIRTUAL_TABLE_ADDR +(page_table_index<<12));
+    unsigned long *page_table;
+    if ((cur_page_directory[page_table_index] & 1) != 1) {
+	//allocate the page table address from process memory pool
+        unsigned long frame_no = process_mem_pool->get_frames(1);
+	cur_page_directory[page_table_index] = (unsigned long)(frame_no*PageTable::PAGE_SIZE | 3);
+	page_table = (unsigned long*)(VIRTUAL_TABLE_ADDR + (page_table_index<<12));
+	memset(page_table, 2, 1024);
+    }
+    page_table = (unsigned long*)(VIRTUAL_TABLE_ADDR + (page_table_index<<12));
+    unsigned long frame_no = address/PageTable::PAGE_SIZE;
+    page_table[page_frame_index] = (unsigned long)(frame_no*PageTable::PAGE_SIZE)|3;
+    Console::puts("handled page fault\n");
+
+}
+/*--------------------------------------------------------------------------*/
+/* METHODS FOR CLASS   V M P o o l */
+/*--------------------------------------------------------------------------*/
+
+VMPool::VMPool(unsigned long  _base_address,
+               unsigned long  _size,
+               ContFramePool *_frame_pool,
+               PageTable     *_page_table) {
+    base_address  = _base_address;
+    size          = _size;
+    frame_pool    = _frame_pool;
+    page_table    = _page_table;
+    region_count  = 0; 
+    page_table->register_pool(this);
+    mem_info_list = (Region_Descriptor*)(frame_pool->get_frames(1)*(PageTable::PAGE_SIZE));
+    silent_array(mem_info_list, frame_pool, page_table);
+    
+    //memset(mem_info_list, 0, REGION_SIZE);
+    Console::puts("Constructed VMPool object.\n");
+}
+
+unsigned long VMPool::allocate(unsigned long _size) {
+    Console::puts("We will assign size to be multiples of page size: ");
+    Console::puti(_size);Console::puts("\n");
+    if (_size == 0) return 0;
+    if (region_count >= REGION_SIZE) {
+ 	Console::puts("running out of space now! I can't handle!");
+	return 0;
+    }
+    _size = ((_size/PageTable::PAGE_SIZE) + (_size%PageTable::PAGE_SIZE>0?1:0))*(PageTable::PAGE_SIZE);
+    unsigned long search_start = base_address;
+    if (region_count > 0) {
+	search_start = mem_info_list[region_count-1].start + mem_info_list[region_count-1].size;
+    }
+    mem_info_list[region_count].start = search_start;
+    mem_info_list[region_count].size = _size;
+    region_count++;
+  
+    Console::puts("Allocated region of memory.\n");
+    Console::puts("Allocated memory start with: ");
+    Console::puti(mem_info_list[region_count-1].start); Console::puts(" and Size is: ");
+    Console::puti(mem_info_list[region_count-1].size); Console::puts("\n");
+    return search_start;
+}
+
+void VMPool::release(unsigned long _start_address) {
+    int index = -1;
+    unsigned int i = 0;
+    for (i=0; i < region_count;i++) {
+	if(mem_info_list[i].start == _start_address) {
+            	index = i;
+		break;
+        }
+    }
+	
+    if (index == -1)  {
+	Console::puts("The address to be released is strange, Please double check!");	
+	for(;;);
+    }    
+
+    unsigned long total_page_no = (mem_info_list[index].size/PageTable::PAGE_SIZE) + 
+					(mem_info_list[index].size%PageTable::PAGE_SIZE > 0?1:0);
+    for (i = 0; i < total_page_no; i++) {
+   	//page_table->free_page(_start_address);
+	frame_address(page_table, _start_address);
+        _start_address += PageTable::PAGE_SIZE;
+     }  
+     
+    region_count -= 1;
+    for (unsigned int j = index+1, i = index;i < region_count && j < REGION_SIZE; i++, j++)
+          mem_info_list[i] = mem_info_list[j];
+  
+    Console::puts("Released region of memory.\n");
+}
+
+bool VMPool::is_legitimate(unsigned long _address) {
+   //Console::puts("Now check address legitimacy and address is: "); Console::puti((int)_address); Console::puts("\n");
+   for (unsigned int i = 0; i < region_count; i++) {
+        Region_Descriptor rd = mem_info_list[i];
+	if(rd.start <= _address && _address < (rd.start + rd.size)) {
+		return true;
+        }
+   }
+   //Console::puts("Checked: address is not part of an allocated region.\n");
+   return false;
+}
+
